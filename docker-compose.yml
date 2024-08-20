@@ -1,0 +1,58 @@
+services:
+  # db:
+  #   image: postgres
+  #   volumes:
+  #     - pgsql_data:/var/lib/postgresql/data
+  #   restart: always
+  #   environment:
+  #     - POSTGRES_PASSWORD="davical"
+  #
+  flask_app:
+    build: .
+    pull_policy: build
+    ports:
+      - "32768:5000"
+    environment:
+      - UID=${UID}
+      - SECRET=${SECRET}
+      - TOKEN=${TOKEN}
+      - DAVICAL_URL=${DAVICAL_URL}
+      - DAVICAL_USER=${DAVICAL_USER}
+      - DAVICAL_PASS=${DAVICAL_PASS}
+      - ADDRESS=${ADDRESS}
+      - LOGIN=${LOGIN}
+    depends_on:
+      - radicale
+
+  radicale:
+    image: tomsquest/docker-radicale
+    container_name: radicale
+    ports:
+      - "5232:5232"
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - CHOWN
+      - KILL
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          pids: 50
+    healthcheck:
+      test: curl -f http://127.0.0.1:5232 || exit 1
+      interval: 30s
+      retries: 3
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+
+# volumes:
+#   davical_config:
+#   pgsql_data:

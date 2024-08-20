@@ -1,0 +1,8 @@
+Flask
+requests
+requests-oauthlib
+oauthlib
+python-dotenv
+caldav
+icalendar
+pytz
