@@ -11,6 +11,7 @@ from datetime import timedelta
 import time
 import pytz
 import json
+from apscheduler.schedulers.background import BackgroundScheduler
 
 # Charger les variables d'environnement à partir du fichier .env
 if os.path.exists('.env'):
@@ -202,15 +203,14 @@ def update():
         return f'Erreur lors de l\'enregistrement sur le serveur Davical: {response.content}', response.status_code
 
 
-
-@app.route('/periodic_update')
 def periodic_update():
-    while True:
-        if loged == True:
-            update()
-            print('updated')
-            time.sleep(120)
-    return("stop")
+    if loged == True:
+        update()
+        print('updated')
+
+scheduler = BackgroundScheduler()
+job = scheduler.add_job(periodic_update, 'interval', minutes=2)
+scheduler.start()
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0')

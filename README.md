@@ -37,7 +37,6 @@
 2. Access the application via your browser at `http://127.0.0.1:5000`.
 4. An initial login is required to initialize the application. Then periodically to refresh the API authorization.
 5. To manually update the calendar, go to the address `/update/`.
-6. To start a periodic calendar update, go to the address `/periodic_update`.
 
 ## Usage with Docker Compose
 1. Make sure you have Docker and Docker Compose installed on your machine.
