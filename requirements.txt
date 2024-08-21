@@ -6,4 +6,4 @@ python-dotenv
 caldav
 icalendar
 pytz
-APScheduler
+Flask-APScheduler 

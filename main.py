@@ -11,16 +11,16 @@ from datetime import timedelta
 import time
 import pytz
 import json
-from apscheduler.schedulers.background import BackgroundScheduler
+from flask_apscheduler import APScheduler
 
-# Charger les variables d'environnement à partir du fichier .env
+# Get the environment file if it exists or create it if env variables are not set
 if os.path.exists('.env'):
     dotenv.load_dotenv()
 elif os.getenv('UID') == "":
     with open('.env', 'w') as f:
         f.write('UID=\"'+input("UID API 42 : ")+'\"\nSECRET=\"'+input("SECRET API 42 : ")+'\"\nTOKEN=\"\"\nADDRESS=\"'+input("SERVER ADDRESS : ")+'\"'+'LOGIN=\"'+input("42 LOGIN : ")+'\"')
 
-# Récupérer les identifiants client
+# Extract the environment variables
 UID = os.getenv('UID')
 SECRET = os.getenv('SECRET')
 token = os.getenv('TOKEN')
@@ -30,20 +30,23 @@ DAVICAL_URL = os.getenv('DAVICAL_URL')
 DAVICAL_USER = os.getenv('DAVICAL_USER')
 DAVICAL_PASS = os.getenv('DAVICAL_PASS')
 
-# URL pour obtenir le jeton d'accès et d'autorisation
+# 42 OAuth2 URLs
 authorization_base_url = 'https://api.intra.42.fr/oauth/authorize'
 token_url = 'https://api.intra.42.fr/oauth/token'
 
-# Scopes requis
+# Scopes
 scopes = ['public', 'profile', 'projects']
 
-# Créer un client OAuth2 avec les scopes
+# Create the OAuth2 client
 client = WebApplicationClient(client_id=UID)
 oauth = OAuth2Session(client=client, scope=scopes, redirect_uri='http://'+ADDRESS+'/callback')
 
 loged = False
 
 app = Flask(__name__)
+
+scheduler = APScheduler()
+scheduler.init_app(app)
 
 api_url = 'https://api.intra.42.fr/v2/slots'
 headers = {
@@ -66,7 +69,7 @@ except Exception as e:
 @app.route('/')
 def index():
     if loged == False:
-        # Rediriger l'utilisateur vers la page d'autorisation
+        # Redirect to the 42 OAuth2 login page
         authorization_url, state = oauth.authorization_url(authorization_base_url)
         return redirect(authorization_url)
     else:
@@ -74,14 +77,14 @@ def index():
 
 @app.route('/callback')
 def callback():
-    # Obtenir le code d'autorisation de la requête
+    # Get the authorization code from the query string
     code = request.args.get('code')
     
     if not code:
         print('Erreur: Aucun code d\'autorisation reçu') 
         return 'Erreur: Aucun code d\'autorisation reçu', 400
     
-    # Préparer les données pour la requête POST
+    # Make POST request data to get the access token
     data = {
         'grant_type': 'authorization_code',
         'client_id': UID,
@@ -90,7 +93,7 @@ def callback():
         'redirect_uri': 'http://'+ADDRESS+'/callback'
     }
     
-    # Effectuer la requête POST pour obtenir le jeton d'accès
+    # Make POST request to get the access token
     response = requests.post(token_url, data=data)
     token = response.json()
     
@@ -98,7 +101,7 @@ def callback():
         print(f"Erreur: {token['error_description']}")
         return f"Erreur: {token['error_description']}", 400
     
-    # Extraire le jeton d'accès
+    # Extract the access token from env
     try:
         access_token = token['access_token']
         dotenv.set_key(dotenv_path=".env", key_to_set="TOKEN", value_to_set=access_token)
@@ -109,7 +112,7 @@ def callback():
         print(token)
         return redirect(url_for('index'))
     
-    # Utiliser le jeton d'accès pour faire une requête à l'API
+    # Get data from the 42 API
     api_url = 'https://api.intra.42.fr/v2/me/scale_teams'
     global headers
     headers = {
@@ -123,16 +126,30 @@ def callback():
     return response.json()
 
 
-### Recuperer toutes les 2 minutes les slots de l'API 42, si un evennement est deja enregistré sur le serveur Davical et qu'il est modifié (champ correcteds),
-### recherche l'utilisateur via une requette sur /v2/users/{id} et met a jour l'evennement sur le serveur Davical en ajoutant les données des champs displayname et location
+### Get data from the 42 API
+# if event exist it update it else it create it
+### if the event is updated it will update the event description with the corrector login and location
+# and save the ical data to the CalDav server
 
 @app.route('/update')
 def update():
-    # Obtenir les données de l'API 42
+    # Get data from the 42 API
     api_url = 'https://api.intra.42.fr/v2/me/scale_teams'
     response = requests.get(api_url, headers=headers)
     if response.status_code != 200:
         loged = False
+        clienDaviCal = caldav.DAVClient(url=DAVICAL_URL, username=DAVICAL_USER, password=DAVICAL_PASS)
+        principal = clienDaviCal.principal()
+        calendars = principal.calendars()
+        event = Event()
+        event.add('uid', 'RECONNECT')
+        event.add('summary', 'Please reconnect to the API with the link : ' + 'http://'+ADDRESS+'/')
+        event.add('description', 'Please reconnect to the API with the link : ' + 'http://'+ADDRESS+'/')
+        event.add('dtstart', datetime.now().replace(tzinfo=pytz.UTC))
+        event.add('dtend', datetime.now().replace(tzinfo=pytz.UTC) + timedelta(minutes=15))
+        ical_data = cal.to_ical()
+        davical_url = f'{DAVICAL_URL}/calendars/{DAVICAL_USER}/default.ics'
+        response = requests.put(davical_url, data=ical_data, auth=(DAVICAL_USER, DAVICAL_PASS), headers={'Content-Type': 'text/calendar'})
         return f'Erreur: Impossible de récupérer les données de l\'API 42: {response.content}', response.status_code
     else:
         data = response.json()
@@ -145,12 +162,11 @@ def update():
             return 'Erreur: Aucun calendrier trouvé sur le serveur Davical', 500
 
         calendar = calendars[0]
-        # Récupérer les événements existants
+        # Get existing events from the CalDav server
         existing_events = calendar.events()
         existing_event_uids = {event.vobject_instance.vevent.uid.value: event for event in existing_events}
 
-        
-        # Créer un objet Calendar
+        # Create Calendar object
         if len(data) != 0:
             cal = Calendar()
             for item in data:
@@ -192,24 +208,22 @@ def update():
                     event.add('description', f' {Correcteur}\nLocation : {CorrecteurLoc}')
                     calendar.add_event(event.to_ical())
             
-            # Enregistrer le fichier iCal sur le serveur Davical
+            # Save iCal data to the server
             ical_data = cal.to_ical()
             davical_url = f'{DAVICAL_URL}/calendars/{DAVICAL_USER}/default.ics'
             response = requests.put(davical_url, data=ical_data, auth=(DAVICAL_USER, DAVICAL_PASS), headers={'Content-Type': 'text/calendar'})
     
     if response.status_code == 201:
-        return 'Fichier iCal enregistré avec succès sur le serveur Davical', 201
+        return 'iCal Saved', 201
     else:
-        return f'Erreur lors de l\'enregistrement sur le serveur Davical: {response.content}', response.status_code
+        return f'Error when saving to CalDav server : {response.content}', response.status_code
 
-
+@scheduler.task('interval', id='periodic_update', minutes=2)
 def periodic_update():
     if loged == True:
         update()
         print('updated')
 
-scheduler = BackgroundScheduler()
-job = scheduler.add_job(periodic_update, 'interval', minutes=2)
 scheduler.start()
 
 if __name__ == '__main__':
